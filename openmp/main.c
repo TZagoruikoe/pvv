@@ -105,7 +105,6 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
     int hor_vert_edges = (nx + 1) * ny + (ny + 1) * nx;
     int edges = with_diag_cell + hor_vert_edges;
     int size_ja = 2 * edges + mtrx.n;
-    //printf("size_ja = %d\n", size_ja);
 
     mtrx.ja = (int*)malloc(sizeof(int) * size_ja);
 
@@ -120,7 +119,6 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
             int res2 = 2 * max(j - 1, 0) + j * (i > 0) + (i < ny) * j + (j > 0);
             int res3 = count_diag_elem(i * nx + j * (i < ny), k1, k2) - diag;
             int result = res1 + res2 + res3 + coord_vertex;
-            //printf("result = %d\n", result);
 
             mtrx.ja[result] = coord_vertex;
 
@@ -237,10 +235,10 @@ void copy_vect(double* src_vect, double* dst_vect, int len_vect, int t) {
     }
 }
 
-void fill_vect(double* vect, int len_vect, double const, int t) {
+void fill_vect(double* vect, int len_vect, double cnst, int t) {
 #pragma omp parallel for num_threads(t)
     for (int i = 0; i < len_vect; i++) {
-        vect[i] = const;
+        vect[i] = cnst;
     }
 }
 
@@ -248,8 +246,11 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     solve_slae_t slv;
     slv.x = (double*)malloc(sizeof(double) * mtrx.n);
 
-    double ro_prev, ro, beta, alpha, time;
-    double* vect_r, vect_z, vect_p, vect_q;
+    double ro_prev, ro, beta, alpha;
+    double* vect_r = (double*)malloc(sizeof(double) * mtrx.n);
+    double* vect_z = (double*)malloc(sizeof(double) * mtrx.n);
+    double* vect_p = (double*)malloc(sizeof(double) * mtrx.n);
+    double* vect_q = (double*)malloc(sizeof(double) * mtrx.n);
 
     mtrx_t mtrx_a;
     mtrx_a.n = mtrx.n;
@@ -281,7 +282,7 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     }
 
     fill_vect(slv.x, mtrx.n, 0, thread);
-    copy_vect(mtrx.b, vect_r, mtrx.n, thread);
+    copy_vect(slae.b, vect_r, mtrx.n, thread);
 
     for (int k = 0; k < maxit; k++) {
         spmv(mtrx_m, vect_r, vect_z, &time.time_spmv, thread);
@@ -311,6 +312,14 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
 
     slv.l2_discr = ro;
 
+    free(vect_r);
+    free(vect_z);
+    free(vect_p);
+    free(vect_q);
+    free(mtrx_m.ia);
+    free(mtrx_m.ja);
+    free(mtrx_m.a);
+
     return slv;
 }
 
@@ -318,7 +327,7 @@ int main (int argc, char** argv) {
     if (argc <= 1) {
         printf("--------------------< HELP >--------------------\n");
         printf("The program accepts command line arguments in the following:\n\n");
-        printf("./main nx ny k1 k2 debug_print\n\n");
+        printf("./main nx ny k1 k2 T eps maxit debug_print\n\n");
         printf("--- nx          - (int) the number of cells in the grid by x\n");
         printf("--- ny          - (int) the number of cells in the grid by y\n");
         printf("--- k1          - (int) parameter for the number of empty cells\n");
@@ -330,11 +339,12 @@ int main (int argc, char** argv) {
         printf("--- debug_print - (int) flag that enables debugging printing.\n");
         printf("                  Accepts values: 0 | 1\n");
         printf("                  Disabled by default: debug_print = 0\n");
-        //printf("\n");
         exit(1);
     }
 
-    int nx, ny, k1, k2, t, deb_print;
+    int nx, ny, k1, k2, t, maxit, deb_print;
+    double eps;
+    char overflow;
     nx = check_input(argv[1]);
     check_less_zero(nx);
     ny = check_input(argv[2]);
@@ -350,20 +360,13 @@ int main (int argc, char** argv) {
     t = check_input(argv[5]);
     check_less_zero(t);
 
-    char overflow;
-    if (sscanf(var, "%d%c", &result, &overflow) == 1) {
-        if (strchr(var, '.') == NULL) {
-            return result;
-        }
-        else {
-            printf("Incorrect input: the variable can only accept only one integer value greater than 0.\n");
-            exit(1);
-        }
-    }
-    else {
+    if (sscanf(argv[6], "%lf%c", &eps, &overflow) != 1) {
         printf("Incorrect input: the variable can only accept only one integer value greater than 0.\n");
         exit(1);
     }
+
+    maxit = check_input(argv[7]);
+    check_less_zero(maxit);
 
     if (argc < 9) {
         deb_print = 0;
@@ -380,18 +383,37 @@ int main (int argc, char** argv) {
 
     double start_time, end_time;
     time_base_op_t time;
+    time.time_spmv = 0;
+    time.time_dot = 0;
+    time.time_axpy = 0;
 
+    printf("Name function  |  Execution time\n");
+    printf("---------------+----------------\n");
     start_time = omp_get_wtime();
     base_mtrx_t mtrx = generate(nx, ny, k1, k2, t);
     end_time = omp_get_wtime();
-    printf("Execution time of the Generate function: %.6lf\n", end_time - start_time);
+    printf("Generate       |  %.6lf\n", end_time - start_time);
 
     start_time = omp_get_wtime();
     slae_t slae = fill(mtrx, t);
     end_time = omp_get_wtime();
-    printf("Execution time of the Fill function: %.6lf\n", end_time - start_time);
+    printf("Fill           |  %.6lf\n", end_time - start_time);
 
-    solve_slae_t slv = solve(mtrx, slae, eps, maxit);
+    start_time = omp_get_wtime();
+    solve_slae_t slv = solve(mtrx, slae, eps, maxit, time, t);
+    end_time = omp_get_wtime();
+    printf("Solve          |  %.6lf\n", end_time - start_time);
+
+    printf("SpMV           |  %.6lf\n", time.time_spmv);
+    printf("dot            |  %.6lf\n", time.time_dot);
+    printf("axpy           |  %.6lf\n\n", time.time_axpy);
+
+
+    printf("The discrepancy: %.5lf", slv.l2_discr);
+    if (slv.l2_discr > eps * eps) {
+        printf("For the specified maxit: %d the system discrepancy doesn't satisfy\n", maxit);
+        printf("the specified accuracy: %.5lf.", eps);
+    }
 
     if (deb_print == 1) {
         printf("N = %d\n", mtrx.n);
@@ -441,6 +463,7 @@ int main (int argc, char** argv) {
     free(mtrx.ja);
     free(slae.a);
     free(slae.b);
+    free(slv.x);
 
     return 0;
 }
