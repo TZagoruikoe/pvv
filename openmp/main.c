@@ -114,7 +114,7 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
             int count = 1;
             int coord_vertex = i * (nx + 1) + j;
 
-            int diag = count_diag_elem(max(i - 1, 0) * nx + max(j - 1, 0), k1, k2);
+            int diag = i > 0 ? count_diag_elem((i - 1) * nx + max(j - 1, 0), k1, k2) : 0;
             int res1 = 2 * (diag + i * nx + max(i - 1, 0) * (nx + 1)) + (nx + 1) * (i > 0);
             int res2 = 2 * max(j - 1, 0) + j * (i > 0) + (i < ny) * j + (j > 0);
             int res3 = count_diag_elem(i * nx + j * (i < ny), k1, k2) - diag;
@@ -126,7 +126,7 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
                 mtrx.ja[result + count] = (i - 1) * (nx + 1) + j;
                 count++; //[i-1][j]
             }
-            if (i < nx) {
+            if (i < ny) {
                 mtrx.ja[result + count] = (i + 1) * (nx + 1) + j;
                 count++; //[i+1][j]
             }
@@ -134,7 +134,7 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
                 mtrx.ja[result + count] = i * (nx + 1) + j - 1;
                 count++; //[i][j-1]
             }
-            if (j < ny) {
+            if (j < nx) {
                 mtrx.ja[result + count] = i * (nx + 1) + j + 1;
                 count++; //[i][j+1]
             }
@@ -206,7 +206,7 @@ double dot(double* vect1, double* vect2, int len_vect, double* time, int t) {
     double start_time, end_time;
 
     start_time = omp_get_wtime();
-#pragma omp parallel for num_threads(t)
+#pragma omp parallel for num_threads(t) reduction(+:res)
     for (int i = 0; i < len_vect; i++) {
         res += vect1[i] * vect2[i];
     }
@@ -242,11 +242,11 @@ void fill_vect(double* vect, int len_vect, double cnst, int t) {
     }
 }
 
-solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_base_op_t time, int thread) {
+solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_base_op_t *time, int thread) {
     solve_slae_t slv;
     slv.x = (double*)malloc(sizeof(double) * mtrx.n);
 
-    double ro_prev, ro, beta, alpha;
+    double ro_prev = 0, ro = 0, beta, alpha;
     double* vect_r = (double*)malloc(sizeof(double) * mtrx.n);
     double* vect_z = (double*)malloc(sizeof(double) * mtrx.n);
     double* vect_p = (double*)malloc(sizeof(double) * mtrx.n);
@@ -262,6 +262,7 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     mtrx_m.ia = (int*)malloc(sizeof(int) * (mtrx.n + 1));
     mtrx_m.ja = (int*)malloc(sizeof(int) * mtrx.n);
     mtrx_m.a = (double*)malloc(sizeof(double) * mtrx.n);
+    mtrx_m.n = mtrx_a.n;
 
 #pragma omp parallel for num_threads(thread)
     for (int i = 0; i < mtrx.n; i++) {
@@ -285,12 +286,12 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     copy_vect(slae.b, vect_r, mtrx.n, thread);
 
     for (int k = 0; k < maxit; k++) {
-        spmv(mtrx_m, vect_r, vect_z, &time.time_spmv, thread);
-        ro = dot(vect_r, vect_z, mtrx.n, &time.time_dot, thread);
+        spmv(mtrx_m, vect_r, vect_z, &time->time_spmv, thread);
+        ro = dot(vect_r, vect_z, mtrx.n, &time->time_dot, thread);
 
         if (k != 0) {
             beta = ro / ro_prev;
-            axpy(beta, vect_p, vect_z, mtrx.n, vect_p, &time.time_axpy, thread);
+            axpy(beta, vect_p, vect_z, mtrx.n, vect_p, &time->time_axpy, thread);
         }
         else {
             copy_vect(vect_z, vect_p, mtrx.n, thread);
@@ -298,10 +299,10 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
 
         ro_prev = ro;
 
-        spmv(mtrx_a, vect_p, vect_q, &time.time_spmv, thread);
-        alpha = ro / dot(vect_p, vect_q, mtrx.n, &time.time_dot, thread);
-        axpy(alpha, vect_p, slv.x, mtrx.n, slv.x, &time.time_axpy, thread);
-        axpy(-alpha, vect_q, vect_r, mtrx.n, vect_r, &time.time_axpy, thread);
+        spmv(mtrx_a, vect_p, vect_q, &time->time_spmv, thread);
+        alpha = ro / dot(vect_p, vect_q, mtrx.n, &time->time_dot, thread);
+        axpy(alpha, vect_p, slv.x, mtrx.n, slv.x, &time->time_axpy, thread);
+        axpy(-alpha, vect_q, vect_r, mtrx.n, vect_r, &time->time_axpy, thread);
 
         slv.iter_count = k + 1;
 
@@ -381,7 +382,7 @@ int main (int argc, char** argv) {
         }
     }
 
-    double start_time, end_time;
+    double start_time, end_time, time_solve;
     time_base_op_t time;
     time.time_spmv = 0;
     time.time_dot = 0;
@@ -400,19 +401,33 @@ int main (int argc, char** argv) {
     printf("Fill           |  %.6lf\n", end_time - start_time);
 
     start_time = omp_get_wtime();
-    solve_slae_t slv = solve(mtrx, slae, eps, maxit, time, t);
+    solve_slae_t slv = solve(mtrx, slae, eps, maxit, &time, t);
     end_time = omp_get_wtime();
-    printf("Solve          |  %.6lf\n", end_time - start_time);
+    time_solve = end_time - start_time;
+    printf("Solve          |  %.6lf\n", time_solve);
 
     printf("SpMV           |  %.6lf\n", time.time_spmv);
     printf("dot            |  %.6lf\n", time.time_dot);
     printf("axpy           |  %.6lf\n\n", time.time_axpy);
 
+    double gflops_spmv = 2 * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count / (time.time_spmv * 1000000000);
+    double gflops_dot = 4 * mtrx.n * slv.iter_count / (time.time_dot * 1000000000);
+    double gflops_axpy = 3 * mtrx.n * slv.iter_count / (time.time_axpy * 1000000000);
+    double gflops_solve = (2 * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count + \
+                          4 * mtrx.n * slv.iter_count + 6 * mtrx.n * slv.iter_count + \
+                          mtrx.n + 3 * slv.iter_count) / (time_solve * 1000000000);
 
-    printf("The discrepancy: %.5lf", slv.l2_discr);
+    printf("Name function  |  ~GFLOPS\n");
+    printf("---------------+----------------\n");
+    printf("Solve          |  %.6lf\n", gflops_solve);
+    printf("SpMV           |  %.6lf\n", gflops_spmv);
+    printf("dot            |  %.6lf\n", gflops_dot);
+    printf("axpy           |  %.6lf\n\n", gflops_axpy);
+
+    printf("The discrepancy: %.5lf (after %d iteration(s))\n", slv.l2_discr, slv.iter_count);
     if (slv.l2_discr > eps * eps) {
         printf("For the specified maxit: %d the system discrepancy doesn't satisfy\n", maxit);
-        printf("the specified accuracy: %.5lf.", eps);
+        printf("the specified accuracy: %.5lf.\n", eps);
     }
 
     if (deb_print == 1) {
@@ -467,8 +482,3 @@ int main (int argc, char** argv) {
 
     return 0;
 }
-
-
-
-
-
