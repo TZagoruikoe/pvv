@@ -410,12 +410,12 @@ int main (int argc, char** argv) {
     printf("dot            |  %.6lf\n", time.time_dot);
     printf("axpy           |  %.6lf\n\n", time.time_axpy);
 
-    double gflops_spmv = 2 * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count / (time.time_spmv * 1000000000);
-    double gflops_dot = 4 * mtrx.n * slv.iter_count / (time.time_dot * 1000000000);
-    double gflops_axpy = 3 * mtrx.n * slv.iter_count / (time.time_axpy * 1000000000);
-    double gflops_solve = (2 * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count + \
-                          4 * mtrx.n * slv.iter_count + 6 * mtrx.n * slv.iter_count + \
-                          mtrx.n + 3 * slv.iter_count) / (time_solve * 1000000000);
+    double gflops_spmv = 2. * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count / (time.time_spmv * 1000000000);
+    double gflops_dot = 4. * mtrx.n * slv.iter_count / (time.time_dot * 1000000000);
+    double gflops_axpy = 3. * mtrx.n * slv.iter_count / (time.time_axpy * 1000000000);
+    double gflops_solve = (2. * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count + \
+                          4. * mtrx.n * slv.iter_count + 3. * mtrx.n * slv.iter_count + \
+                          mtrx.n + 3. * slv.iter_count) / (time_solve * 1000000000);
 
     printf("Name function  |  ~GFLOPS\n");
     printf("---------------+----------------\n");
