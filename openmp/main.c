@@ -1,36 +1,18 @@
 #include <stdio.h>
-#include <unistd.h>
 #include <string.h>
-#include <math.h>
 #include <stdlib.h>
 #include <math.h>
-#include <time.h>
-#include <sys/time.h>
 #include <omp.h>
 
-/*
-  [o---o---o---o
-   |   |   | \ |
-   o---o---o---o
-   | \ | \]| # | #
- [[o---o---o]]-0
-   | # | \ | \#|
-   o---o---o---o
-
-   --- [  first area  ]
-   --- [[ second area ]]
-   --- #  third area  #
-   --- 0 - the vertex for calc
-*/
+#define MAX_ADJACENT_V 7
 
 typedef struct {
     int n;
-    int* ia;
-    int* ja;
+    int (*arr)[MAX_ADJACENT_V];
 } base_mtrx_t;
 
 typedef struct {
-    double* a;
+    double (*a)[MAX_ADJACENT_V];
     double* b;
 } slae_t;
 
@@ -42,9 +24,8 @@ typedef struct {
 
 typedef struct {
     int n;
-    int* ia;
-    int* ja;
-    double* a;
+    int (*arr)[MAX_ADJACENT_V];
+    double (*a)[MAX_ADJACENT_V];
 } mtrx_t;
 
 typedef struct {
@@ -54,7 +35,6 @@ typedef struct {
 } time_base_op_t;
 
 int max(int a, int b);
-int count_diag_elem(int cnt_cell, int k1, int k2);
 
 inline int max(int a, int b) {
     if (a >= b) {
@@ -63,10 +43,6 @@ inline int max(int a, int b) {
     else {
         return b;
     }
-}
-
-inline int count_diag_elem(int cnt_cell, int k1, int k2) {
-    return cnt_cell / (k1 + k2) * k2 + max(cnt_cell % (k1 + k2) - k1, 0);
 }
 
 int check_input(char* var) {
@@ -99,60 +75,46 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
     base_mtrx_t mtrx;
     
     mtrx.n = (nx + 1) * (ny + 1);
-    mtrx.ia = (int*)malloc(sizeof(int) * (mtrx.n + 1));
-
-    int with_diag_cell = count_diag_elem(nx * ny, k1, k2);
-    int hor_vert_edges = (nx + 1) * ny + (ny + 1) * nx;
-    int edges = with_diag_cell + hor_vert_edges;
-    int size_ja = 2 * edges + mtrx.n;
-
-    mtrx.ja = (int*)malloc(sizeof(int) * size_ja);
+    mtrx.arr = malloc(sizeof(int) * mtrx.n * MAX_ADJACENT_V);
 
 #pragma omp parallel for num_threads(threads) collapse(2)
     for (int i = 0; i < ny + 1; i++) {
         for (int j = 0; j < nx + 1; j++) {
             int count = 1;
             int coord_vertex = i * (nx + 1) + j;
-
-            int diag = i > 0 ? count_diag_elem((i - 1) * nx + max(j - 1, 0), k1, k2) : 0;
-            int res1 = 2 * (diag + i * nx + max(i - 1, 0) * (nx + 1)) + (nx + 1) * (i > 0);
-            int res2 = 2 * max(j - 1, 0) + j * (i > 0) + (i < ny) * j + (j > 0);
-            int res3 = count_diag_elem(i * nx + j * (i < ny), k1, k2) - diag;
-            int result = res1 + res2 + res3 + coord_vertex;
-
-            mtrx.ja[result] = coord_vertex;
+            mtrx.arr[coord_vertex][0] = coord_vertex;
 
             if (i > 0) {
-                mtrx.ja[result + count] = (i - 1) * (nx + 1) + j;
+                mtrx.arr[coord_vertex][count] = (i - 1) * (nx + 1) + j;
                 count++; //[i-1][j]
             }
             if (i < ny) {
-                mtrx.ja[result + count] = (i + 1) * (nx + 1) + j;
+                mtrx.arr[coord_vertex][count] = (i + 1) * (nx + 1) + j;
                 count++; //[i+1][j]
             }
             if (j > 0) {
-                mtrx.ja[result + count] = i * (nx + 1) + j - 1;
+                mtrx.arr[coord_vertex][count] = i * (nx + 1) + j - 1;
                 count++; //[i][j-1]
             }
             if (j < nx) {
-                mtrx.ja[result + count] = i * (nx + 1) + j + 1;
+                mtrx.arr[coord_vertex][count] = i * (nx + 1) + j + 1;
                 count++; //[i][j+1]
             }
 
             if (i < ny && j < nx && ((nx * i + j) % (k1 + k2)) >= k1) {
-                mtrx.ja[result + count] = (i + 1) * (nx + 1) + j + 1;
+                mtrx.arr[coord_vertex][count] = (i + 1) * (nx + 1) + j + 1;
                 count++; //[i+1][j+1]
             }
             if (i > 0 && j > 0 && ((nx * (i - 1) + (j - 1)) % (k1 + k2)) >= k1) {
-                mtrx.ja[result + count] = (i - 1) * (nx + 1) + j - 1;
+                mtrx.arr[coord_vertex][count] = (i - 1) * (nx + 1) + j - 1;
                 count++; //[i-1][j-1]
             }
-
-            mtrx.ia[coord_vertex] = result;
+            while (count < MAX_ADJACENT_V) {
+                mtrx.arr[coord_vertex][count] = -1;
+                count++;
+            }
         }
     }
-
-    mtrx.ia[mtrx.n] = size_ja;
 
     return mtrx;
 }
@@ -160,24 +122,27 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
 slae_t fill(base_mtrx_t mtrx, int threads) {
     slae_t slae;
 
-    slae.a = (double*)malloc(sizeof(double) * mtrx.ia[mtrx.n]);
-    slae.b = (double*)malloc(sizeof(double) * mtrx.n);
+    slae.a = malloc(sizeof(double) * mtrx.n * MAX_ADJACENT_V);
+    slae.b = malloc(sizeof(double) * mtrx.n);
 
 #pragma omp parallel for num_threads(threads)
     for (int i = 0; i < mtrx.n; i++) {
         double sum = 0;
         int coord_j = -1;
-        for (int j_idx = mtrx.ia[i]; j_idx < mtrx.ia[i + 1]; j_idx++) {
-            int j = mtrx.ja[j_idx];
+        for (int j_idx = 0; j_idx < MAX_ADJACENT_V; j_idx++) {
+            int j = mtrx.arr[i][j_idx];
+            if (j == -1) {
+                break;
+            }
             if (i != j) {
-                slae.a[j_idx] = cos(i * j + i + j);
-                sum += fabs(slae.a[j_idx]);
+                slae.a[i][j_idx] = cos(i * j + i + j);
+                sum += fabs(slae.a[i][j_idx]);
             }
             else {
                 coord_j = j_idx;
             }
         }
-        slae.a[coord_j] = 1.234 * sum;
+        slae.a[i][coord_j] = 1.234 * sum;
 
         slae.b[i] = sin(i);
     }
@@ -192,9 +157,12 @@ void spmv(mtrx_t mtrx, double* vect, double* res, double* time, int t) {
 #pragma omp parallel for num_threads(t)
     for (int i = 0; i < mtrx.n; i++) {
         res[i] = 0;
-        for (int j_idx = mtrx.ia[i]; j_idx < mtrx.ia[i + 1]; j_idx++) {
-            int j = mtrx.ja[j_idx];
-            res[i] += mtrx.a[j_idx] * vect[j];
+        for (int j_idx = 0; j_idx < MAX_ADJACENT_V; j_idx++) {
+            int j = mtrx.arr[i][j_idx];
+            if (j == -1) {
+                break;
+            }
+            res[i] += mtrx.a[i][j_idx] * vect[j];
         }
     }
     end_time = omp_get_wtime();
@@ -244,39 +212,38 @@ void fill_vect(double* vect, int len_vect, double cnst, int t) {
 
 solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_base_op_t *time, int thread) {
     solve_slae_t slv;
-    slv.x = (double*)malloc(sizeof(double) * mtrx.n);
+    slv.x = malloc(sizeof(double) * mtrx.n);
 
     double ro_prev = 0, ro = 0, beta, alpha;
-    double* vect_r = (double*)malloc(sizeof(double) * mtrx.n);
-    double* vect_z = (double*)malloc(sizeof(double) * mtrx.n);
-    double* vect_p = (double*)malloc(sizeof(double) * mtrx.n);
-    double* vect_q = (double*)malloc(sizeof(double) * mtrx.n);
+    double* vect_r = malloc(sizeof(double) * mtrx.n);
+    double* vect_z = malloc(sizeof(double) * mtrx.n);
+    double* vect_p = malloc(sizeof(double) * mtrx.n);
+    double* vect_q = malloc(sizeof(double) * mtrx.n);
 
     mtrx_t mtrx_a;
     mtrx_a.n = mtrx.n;
-    mtrx_a.ia = mtrx.ia;
-    mtrx_a.ja = mtrx.ja;
+    mtrx_a.arr = mtrx.arr;
     mtrx_a.a = slae.a;
 
     mtrx_t  mtrx_m;
-    mtrx_m.ia = (int*)malloc(sizeof(int) * (mtrx.n + 1));
-    mtrx_m.ja = (int*)malloc(sizeof(int) * mtrx.n);
-    mtrx_m.a = (double*)malloc(sizeof(double) * mtrx.n);
+    mtrx_m.arr = malloc(sizeof(int) * mtrx.n * MAX_ADJACENT_V);
+    mtrx_m.a = malloc(sizeof(double) * mtrx.n * MAX_ADJACENT_V);
     mtrx_m.n = mtrx_a.n;
 
 #pragma omp parallel for num_threads(thread)
     for (int i = 0; i < mtrx.n; i++) {
-        mtrx_m.ia[i] = i;
-        mtrx_m.ja[i] = i;
+        mtrx_m.arr[i][0] = i;
+        for (int j = 1; j < MAX_ADJACENT_V; j++) {
+            mtrx_m.arr[i][j] = -1;
+        }
     }
-    mtrx_m.ia[mtrx.n] = mtrx.n;
 
 #pragma omp parallel for num_threads(thread)
     for (int i = 0; i < mtrx.n; i++) {
-        for (int j_idx = mtrx_a.ia[i]; j_idx < mtrx_a.ia[i + 1]; j_idx++) {
-            int j = mtrx_a.ja[j_idx];
+        for (int j_idx = 0; j_idx < MAX_ADJACENT_V; j_idx++) {
+            int j = mtrx_a.arr[i][j_idx];
             if (i == j) {
-                mtrx_m.a[i] = 1 / mtrx_a.a[j_idx];
+                mtrx_m.a[i][0] = 1 / mtrx_a.a[i][j_idx];
                 break;
             }
         }
@@ -317,8 +284,7 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     free(vect_z);
     free(vect_p);
     free(vect_q);
-    free(mtrx_m.ia);
-    free(mtrx_m.ja);
+    free(mtrx_m.arr);
     free(mtrx_m.a);
 
     return slv;
@@ -362,7 +328,7 @@ int main (int argc, char** argv) {
     check_less_zero(t);
 
     if (sscanf(argv[6], "%lf%c", &eps, &overflow) != 1) {
-        printf("Incorrect input: the variable can only accept only one integer value greater than 0.\n");
+        printf("Incorrect input: the variable can only accept only one double value greater than 0.\n");
         exit(1);
     }
 
@@ -410,10 +376,17 @@ int main (int argc, char** argv) {
     printf("dot            |  %.6lf\n", time.time_dot);
     printf("axpy           |  %.6lf\n\n", time.time_axpy);
 
-    double gflops_spmv = 2. * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count / (time.time_spmv * 1000000000);
+    int cells = nx * ny;
+    int diag_elem = cells / (k1 + k2) * k2 + max(cells % (k1 + k2) - k1, 0);
+    int vert = (nx + 1) * ny;
+    int gor = nx * (ny + 1);
+    int nghb = (diag_elem + vert + gor) * 2;
+    int all = nghb + mtrx.n;
+
+    double gflops_spmv = 2. * (mtrx.n + all) * slv.iter_count / (time.time_spmv * 1000000000);
     double gflops_dot = 4. * mtrx.n * slv.iter_count / (time.time_dot * 1000000000);
     double gflops_axpy = 3. * mtrx.n * slv.iter_count / (time.time_axpy * 1000000000);
-    double gflops_solve = (2. * (mtrx.ia[mtrx.n] + mtrx.n) * slv.iter_count + \
+    double gflops_solve = (2. * (mtrx.n + all) * slv.iter_count + \
                           4. * mtrx.n * slv.iter_count + 3. * mtrx.n * slv.iter_count + \
                           mtrx.n + 3. * slv.iter_count) / (time_solve * 1000000000);
 
@@ -433,36 +406,35 @@ int main (int argc, char** argv) {
     if (deb_print == 1) {
         printf("N = %d\n", mtrx.n);
 
-        printf("IA = [");
-        for (int i = 0; i < mtrx.n + 1; i++) {
-            if (i != mtrx.n) {
-                printf("%d, ", mtrx.ia[i]);
-            }
-            else {
-                printf("%d]\n", mtrx.ia[i]);
-            }
-        }
-
-        printf("JA = [");
-        for (int i = 0; i < mtrx.ia[mtrx.n]; i++) {
-            if (i != mtrx.ia[mtrx.n] - 1) {
-                printf("%d, ", mtrx.ja[i]);
-            }
-            else {
-                printf("%d]\n", mtrx.ja[i]);
+        printf("\n");
+        printf("ARR = ");
+        for (int i = 0; i < mtrx.n; i++) {
+            printf("[");
+            for (int j = 0; j < MAX_ADJACENT_V; j++) {
+                if (j != MAX_ADJACENT_V - 1) {
+                    printf("%d, ", mtrx.arr[i][j]);
+                }
+                else {
+                    printf("%d]\n", mtrx.arr[i][j]);
+                }
             }
         }
-
+        
+        printf("\n");
         printf("A = [");
-        for (int i = 0; i < mtrx.ia[mtrx.n]; i++) {
-            if (i != mtrx.ia[mtrx.n] - 1) {
-                printf("%lf, ", slae.a[i]);
-            }
-            else {
-                printf("%lf]\n", slae.a[i]);
+        for (int i = 0; i < mtrx.n; i++) {
+            printf("[");
+            for (int j = 0; j < MAX_ADJACENT_V; j++) {
+                if (j != MAX_ADJACENT_V - 1) {
+                    printf("%lf, ", slae.a[i][j]);
+                }
+                else {
+                    printf("%lf]\n", slae.a[i][j]);
+                }
             }
         }
 
+        printf("\n");
         printf("b = [");
         for (int i = 0; i < mtrx.n; i++) {
             if (i != mtrx.n - 1) {
@@ -474,8 +446,7 @@ int main (int argc, char** argv) {
         }
     }
 
-    free(mtrx.ia);
-    free(mtrx.ja);
+    free(mtrx.arr);
     free(slae.a);
     free(slae.b);
     free(slv.x);
