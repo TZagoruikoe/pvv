@@ -83,14 +83,14 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
             int count = 1;
             int coord_vertex = i * (nx + 1) + j;
             mtrx.arr[coord_vertex][0] = coord_vertex;
-
+            
+            if (i > 0 && j > 0 && ((nx * (i - 1) + (j - 1)) % (k1 + k2)) >= k1) {
+                mtrx.arr[coord_vertex][count] = (i - 1) * (nx + 1) + j - 1;
+                count++; //[i-1][j-1]
+            }
             if (i > 0) {
                 mtrx.arr[coord_vertex][count] = (i - 1) * (nx + 1) + j;
                 count++; //[i-1][j]
-            }
-            if (i < ny) {
-                mtrx.arr[coord_vertex][count] = (i + 1) * (nx + 1) + j;
-                count++; //[i+1][j]
             }
             if (j > 0) {
                 mtrx.arr[coord_vertex][count] = i * (nx + 1) + j - 1;
@@ -100,15 +100,15 @@ base_mtrx_t generate(int nx, int ny, int k1, int k2, int threads) {
                 mtrx.arr[coord_vertex][count] = i * (nx + 1) + j + 1;
                 count++; //[i][j+1]
             }
-
+            if (i < ny) {
+                mtrx.arr[coord_vertex][count] = (i + 1) * (nx + 1) + j;
+                count++; //[i+1][j]
+            }
             if (i < ny && j < nx && ((nx * i + j) % (k1 + k2)) >= k1) {
                 mtrx.arr[coord_vertex][count] = (i + 1) * (nx + 1) + j + 1;
                 count++; //[i+1][j+1]
             }
-            if (i > 0 && j > 0 && ((nx * (i - 1) + (j - 1)) % (k1 + k2)) >= k1) {
-                mtrx.arr[coord_vertex][count] = (i - 1) * (nx + 1) + j - 1;
-                count++; //[i-1][j-1]
-            }
+            
             while (count < MAX_ADJACENT_V) {
                 mtrx.arr[coord_vertex][count] = -1;
                 count++;
@@ -169,6 +169,14 @@ void spmv(mtrx_t mtrx, double* vect, double* res, double* time, int t) {
     *time += end_time - start_time;
 }
 
+void spmv_v2(mtrx_t mtrx, double* vect, double* res, int t) {
+#pragma omp parallel for num_threads(t)
+    for (int i = 0; i < mtrx.n; i++) {
+        res[i] = 0;
+        res[i] += vect[mtrx.arr[i][0]] / mtrx.a[i][0];
+    }
+}
+
 double dot(double* vect1, double* vect2, int len_vect, double* time, int t) {
     double res = 0;
     double start_time, end_time;
@@ -225,35 +233,11 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     mtrx_a.arr = mtrx.arr;
     mtrx_a.a = slae.a;
 
-    mtrx_t  mtrx_m;
-    mtrx_m.arr = malloc(sizeof(int) * mtrx.n * MAX_ADJACENT_V);
-    mtrx_m.a = malloc(sizeof(double) * mtrx.n * MAX_ADJACENT_V);
-    mtrx_m.n = mtrx_a.n;
-
-#pragma omp parallel for num_threads(thread)
-    for (int i = 0; i < mtrx.n; i++) {
-        mtrx_m.arr[i][0] = i;
-        for (int j = 1; j < MAX_ADJACENT_V; j++) {
-            mtrx_m.arr[i][j] = -1;
-        }
-    }
-
-#pragma omp parallel for num_threads(thread)
-    for (int i = 0; i < mtrx.n; i++) {
-        for (int j_idx = 0; j_idx < MAX_ADJACENT_V; j_idx++) {
-            int j = mtrx_a.arr[i][j_idx];
-            if (i == j) {
-                mtrx_m.a[i][0] = 1 / mtrx_a.a[i][j_idx];
-                break;
-            }
-        }
-    }
-
     fill_vect(slv.x, mtrx.n, 0, thread);
     copy_vect(slae.b, vect_r, mtrx.n, thread);
 
     for (int k = 0; k < maxit; k++) {
-        spmv(mtrx_m, vect_r, vect_z, &time->time_spmv, thread);
+        spmv_v2(mtrx_a, vect_r, vect_z, thread);
         ro = dot(vect_r, vect_z, mtrx.n, &time->time_dot, thread);
 
         if (k != 0) {
@@ -284,8 +268,6 @@ solve_slae_t solve(base_mtrx_t mtrx, slae_t slae, double eps, int maxit, time_ba
     free(vect_z);
     free(vect_p);
     free(vect_q);
-    free(mtrx_m.arr);
-    free(mtrx_m.a);
 
     return slv;
 }
@@ -383,7 +365,7 @@ int main (int argc, char** argv) {
     int nghb = (diag_elem + vert + gor) * 2;
     int all = nghb + mtrx.n;
 
-    double gflops_spmv = 2. * (mtrx.n + all) * slv.iter_count / (time.time_spmv * 1000000000);
+    double gflops_spmv = 2. * all * slv.iter_count / (time.time_spmv * 1000000000);
     double gflops_dot = 4. * mtrx.n * slv.iter_count / (time.time_dot * 1000000000);
     double gflops_axpy = 3. * mtrx.n * slv.iter_count / (time.time_axpy * 1000000000);
     double gflops_solve = (2. * (mtrx.n + all) * slv.iter_count + \
